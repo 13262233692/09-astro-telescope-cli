@@ -280,6 +280,91 @@ func cmdListTargets(targets []*model.ObservationTarget) {
 	fmt.Println()
 }
 
+func cmdBatchParse(dir string, workers int) {
+	fmt.Printf("Batch parsing FITS files in: %s\n", dir)
+	fmt.Printf("  Worker count:   %d\n\n", workers)
+
+	startTime := time.Now()
+	config := fits.BatchConfig{
+		Workers:    workers,
+		Extensions: []string{".fits", ".FITS", ".fit", ".FIT"},
+	}
+
+	fmt.Println("Collecting files...")
+	files, err := fits.CollectFITSFiles(dir, config.Extensions)
+	if err != nil {
+		fmt.Printf("Error collecting files: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("  Found %d FITS files\n\n", len(files))
+
+	fmt.Println("Parsing with Worker Pool...")
+	results, stats := fits.ParseBatch(files, config)
+
+	elapsed := time.Since(startTime)
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println("  Batch Parse Results")
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Printf("  Total files:     %d\n", stats.Total)
+	fmt.Printf("  Succeeded:       %d\n", stats.Succeeded)
+	fmt.Printf("  Failed:          %d\n", stats.Failed)
+	fmt.Printf("  Max open files:  %d (peak concurrent FD)\n", stats.MaxOpenFD)
+	fmt.Printf("  Elapsed time:    %s\n", elapsed.Round(time.Millisecond))
+	if len(files) > 0 {
+		fmt.Printf("  Avg per file:    %s\n", (elapsed / time.Duration(len(files))).Round(time.Microsecond))
+	}
+	fmt.Println(strings.Repeat("=", 60))
+	fmt.Println()
+
+	if stats.Failed > 0 {
+		fmt.Println("Failed files (first 5):")
+		count := 0
+		for _, r := range results {
+			if r.Error != nil && count < 5 {
+				fmt.Printf("  %s: %v\n", r.Path, r.Error)
+				count++
+			}
+		}
+		fmt.Println()
+	}
+}
+
+func cmdGenBatch(dir string, count int) {
+	fmt.Printf("Generating %d sample FITS files in: %s\n", count, dir)
+
+	err := os.MkdirAll(dir, 0755)
+	if err != nil {
+		fmt.Printf("Error creating directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	startTime := time.Now()
+	generated := 0
+
+	for i := 0; i < count; i++ {
+		filename := fmt.Sprintf("calib_%06d.fits", i)
+		path := filepath.Join(dir, filename)
+		err := fits.GenerateSampleFITSHeader(path)
+		if err != nil {
+			fmt.Printf("Warning: failed to generate %s: %v\n", path, err)
+			continue
+		}
+		generated++
+
+		if generated%1000 == 0 {
+			fmt.Printf("  Generated %d / %d...\n", generated, count)
+		}
+	}
+
+	elapsed := time.Since(startTime)
+	fmt.Printf("\nGenerated %d files in %s\n", generated, elapsed.Round(time.Millisecond))
+	fmt.Printf("  Directory: %s\n", dir)
+	fmt.Println()
+}
+
 func printUsage() {
 	fmt.Println("Astro Telescope CLI — Radio Telescope Observation Scheduler")
 	fmt.Println()
@@ -289,6 +374,8 @@ func printUsage() {
 	fmt.Println("Commands:")
 	fmt.Println("  schedule              Run the observation scheduler (default)")
 	fmt.Println("  fits <path>           Parse a FITS header file")
+	fmt.Println("  batch <dir>           Batch parse all FITS files in a directory (Worker Pool)")
+	fmt.Println("  genbatch <dir>        Generate sample FITS files for testing")
 	fmt.Println("  visibility <site> <target>  Compute target visibility from a site")
 	fmt.Println("  gensample <path>      Generate a sample FITS header file")
 	fmt.Println("  listsites             List all telescope sites")
@@ -299,6 +386,8 @@ func printUsage() {
 	fmt.Println("  -horizon <hours>      Scheduling horizon in hours (default: 24)")
 	fmt.Println("  -site <id>            Site ID for visibility command")
 	fmt.Println("  -target <id>          Target ID for visibility command")
+	fmt.Println("  -workers <n>          Number of workers for batch parsing (default: 32)")
+	fmt.Println("  -count <n>            Number of files for genbatch (default: 1000)")
 	fmt.Println()
 }
 
@@ -316,6 +405,8 @@ func main() {
 	horizonHours := fs.Float64("horizon", 24, "Scheduling horizon in hours")
 	siteID := fs.String("site", "", "Site ID")
 	targetID := fs.String("target", "", "Target ID")
+	workers := fs.Int("workers", 32, "Number of worker goroutines for batch processing")
+	batchCount := fs.Int("count", 1000, "Number of sample FITS files to generate")
 	fs.Parse(args)
 
 	sites := defaultSites()
@@ -382,6 +473,28 @@ func main() {
 
 	case "listtargets":
 		cmdListTargets(targets)
+
+	case "batch":
+		dir := ""
+		if fs.NArg() > 0 {
+			dir = fs.Arg(0)
+		} else if len(args) > 0 {
+			dir = args[0]
+		}
+		if dir == "" {
+			fmt.Println("Error: directory path required for batch command")
+			os.Exit(1)
+		}
+		cmdBatchParse(dir, *workers)
+
+	case "genbatch":
+		dir := "fits_samples"
+		if fs.NArg() > 0 {
+			dir = fs.Arg(0)
+		} else if len(args) > 0 {
+			dir = args[0]
+		}
+		cmdGenBatch(dir, *batchCount)
 
 	default:
 		fmt.Printf("Unknown command: %s\n\n", cmd)
