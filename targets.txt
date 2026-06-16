@@ -1,0 +1,9 @@
+# Observation Targets
+# Format: Name RA(degrees) Dec(degrees) Duration(minutes) Priority(1-10)
+Andromeda    10.6847   41.2688  60  8
+Crab_Nebula  83.6331   22.0145  45  7
+Orion        83.8221   -5.3911  30  6
+Centaurus_A  201.3651  -43.0193 90  9
+Whirlpool    202.4695  47.1953  50  5
+Virgo_A      187.7059  12.3911  75  8
+Cassiopeia_A 350.8664  58.8117  40  7
