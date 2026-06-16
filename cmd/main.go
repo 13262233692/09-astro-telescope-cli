@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"astro-telescope-cli/internal/astronomy"
+	"astro-telescope-cli/internal/dag"
 	"astro-telescope-cli/internal/fits"
 	"astro-telescope-cli/internal/scheduler"
 	"astro-telescope-cli/internal/timeline"
@@ -280,6 +281,88 @@ func cmdListTargets(targets []*model.ObservationTarget) {
 	fmt.Println()
 }
 
+func cmdVLBI(sites []*model.TelescopeSite, targets []*model.ObservationTarget, horizonHours float64, faultSite string) {
+	startTime := time.Now().UTC().Truncate(time.Hour)
+
+	fmt.Printf("Building VLBI Observation DAG...\n")
+	fmt.Printf("  Start time:    %s\n", startTime.Format("2006-01-02 15:04 UTC"))
+	fmt.Printf("  Horizon:       %.0f hours\n", horizonHours)
+	fmt.Printf("  Telescopes:    %d\n", len(sites))
+	fmt.Printf("  Targets:       %d\n", len(targets))
+	fmt.Println()
+
+	config := dag.DefaultVLBIConfig()
+
+	fmt.Println("  Building schedule...")
+	observationDAG := dag.BuildVLBIDAG(sites, targets, startTime, horizonHours, config)
+
+	fmt.Printf("DAG built: %d nodes, %d edges\n\n", len(observationDAG.Nodes), len(observationDAG.Edges))
+
+	fmt.Print(dag.RenderDAGTree(observationDAG))
+	fmt.Print(dag.RenderDAGProgressBar(observationDAG))
+	fmt.Print(dag.RenderVLBIGroups(observationDAG))
+
+	var siteIDs []string
+	for _, s := range sites {
+		siteIDs = append(siteIDs, s.ID)
+	}
+	fmt.Print(dag.RenderSiteHealthBar(observationDAG, siteIDs))
+
+	fmt.Print(dag.RenderTimeline(observationDAG, startTime, horizonHours))
+
+	if faultSite != "" {
+		fmt.Println()
+		fmt.Printf("!! Simulating fault at site: %s !!\n\n", faultSite)
+
+		var reason string
+		found := false
+		for _, s := range sites {
+			if s.ID == faultSite {
+				reason = fmt.Sprintf("Antenna malfunction at %s", s.Name)
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Printf("Unknown site: %s\n", faultSite)
+			return
+		}
+
+		fmt.Println("  Propagating fault through DAG...")
+		result := observationDAG.PropagateFault(faultSite, reason)
+
+		fmt.Print(dag.RenderFaultPropagation(result))
+		fmt.Print(dag.RenderDAGTree(observationDAG))
+		fmt.Print(dag.RenderDAGProgressBar(observationDAG))
+		fmt.Print(dag.RenderVLBIGroups(observationDAG))
+		fmt.Print(dag.RenderSiteHealthBar(observationDAG, siteIDs))
+		fmt.Print(dag.RenderTimeline(observationDAG, startTime, horizonHours))
+
+		if len(result.ReschedNodes) > 0 {
+			fmt.Println()
+			fmt.Println("  Rescheduling affected observations...")
+
+			totalSteps := len(result.ReschedNodes)
+			for i, nid := range result.ReschedNodes {
+				pct := (i + 1) * 100 / totalSteps
+				fmt.Printf("  [~~] Rescheduling: %3d%%  %s\n", pct, nid)
+			}
+
+			for _, nid := range result.ReschedNodes {
+				node, ok := observationDAG.GetNode(nid)
+				if ok {
+					node.Status = dag.StatusReady
+				}
+			}
+
+			fmt.Println()
+			fmt.Println("  [OK] Rescheduling complete. Updated DAG status:")
+			fmt.Print(dag.RenderDAGProgressBar(observationDAG))
+			fmt.Print(dag.RenderSiteHealthBar(observationDAG, siteIDs))
+		}
+	}
+}
+
 func cmdBatchParse(dir string, workers int) {
 	fmt.Printf("Batch parsing FITS files in: %s\n", dir)
 	fmt.Printf("  Worker count:   %d\n\n", workers)
@@ -373,6 +456,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  schedule              Run the observation scheduler (default)")
+	fmt.Println("  vlbi                  Build VLBI DAG with synchronized dependencies")
 	fmt.Println("  fits <path>           Parse a FITS header file")
 	fmt.Println("  batch <dir>           Batch parse all FITS files in a directory (Worker Pool)")
 	fmt.Println("  genbatch <dir>        Generate sample FITS files for testing")
@@ -388,6 +472,7 @@ func printUsage() {
 	fmt.Println("  -target <id>          Target ID for visibility command")
 	fmt.Println("  -workers <n>          Number of workers for batch parsing (default: 32)")
 	fmt.Println("  -count <n>            Number of files for genbatch (default: 1000)")
+	fmt.Println("  -fault <site_id>      Simulate fault at site (for vlbi command)")
 	fmt.Println()
 }
 
@@ -407,6 +492,7 @@ func main() {
 	targetID := fs.String("target", "", "Target ID")
 	workers := fs.Int("workers", 32, "Number of worker goroutines for batch processing")
 	batchCount := fs.Int("count", 1000, "Number of sample FITS files to generate")
+	faultSite := fs.String("fault", "", "Simulate fault at site ID (for vlbi command)")
 	fs.Parse(args)
 
 	sites := defaultSites()
@@ -473,6 +559,9 @@ func main() {
 
 	case "listtargets":
 		cmdListTargets(targets)
+
+	case "vlbi":
+		cmdVLBI(sites, targets, *horizonHours, *faultSite)
 
 	case "batch":
 		dir := ""

@@ -61,7 +61,7 @@ func (s *Scheduler) computeScore(priority int, avgAlt float64, health float64) f
 
 func (s *Scheduler) generateCandidates(startTime time.Time, horizonHours float64) []candidateSlot {
 	var candidates []candidateSlot
-	step := 10 * time.Minute
+	step := 60 * time.Minute
 	horizon := startTime.Add(time.Duration(horizonHours * float64(time.Hour)))
 
 	for _, target := range s.targets {
@@ -74,7 +74,7 @@ func (s *Scheduler) generateCandidates(startTime time.Time, horizonHours float64
 				avgAlt := 0.0
 				samples := 0
 				valid := true
-				checkStep := 5 * time.Minute
+				checkStep := 15 * time.Minute
 
 				for ct := t; ct.Before(t.Add(target.Duration)); ct = ct.Add(checkStep) {
 					altAz := astronomy.EquatorialToHorizontal(ct, target.RA, target.Dec, site.Latitude, site.Longitude)
